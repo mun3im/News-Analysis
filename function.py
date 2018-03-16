@@ -13,6 +13,7 @@ import threading
 import pickle
 import numpy as np
 import spacy
+import pandas as pd
 from unidecode import unidecode
 import itertools
 from fake_useragent import UserAgent
@@ -21,6 +22,10 @@ from nltk.tokenize import word_tokenize
 from datetime import datetime, timedelta
 from dateutil import parser
 from newspaper import Article
+import networkx as nx
+import networkx.drawing.layout as nxlayout
+import plotly.graph_objs as go
+from sklearn.feature_extraction.text import TfidfVectorizer
 english_stopwords = stopwords.words('english')
 nlp = spacy.load('en_core_web_md')
 
@@ -185,6 +190,7 @@ def filterP(links):
     overall_emotion, overall_sentiment, overall_subj, overall_pol, overall_irony, overall_msg, overall_bias = [], [], [], [], [], [], []
     overall_local_entities_nouns = []
     persons, orgs, gpes = [], [], []
+    df_texts, df_sentiments = [], []
     for i in range(len(outputs)):
         local_entities_nouns, local_persons, local_orgs, local_gpes = [], [], [], []
         for sentence in outputs[i]['p']:
@@ -198,6 +204,8 @@ def filterP(links):
                 if (len(token.ent_type_) > 0 or token.tag_ in ['NNP','NN']) and str(token).lower() not in english_stopwords:
                     local_entities_nouns.append(str(token))
         sentiments = getsentiment(outputs[i]['p-classifier'])
+        df_sentiments += np.argmax(sentiments,axis=1).tolist()
+        df_texts += outputs[i]['p-classifier']
         emotions = getemotion(outputs[i]['p-classifier'])
         msgs = getmsg(outputs[i]['p-classifier'])
         subjectivities, polarities, ironies, biases = getpolar(outputs[i]['p-classifier'])
@@ -239,6 +247,72 @@ def filterP(links):
         outputs[i]['avg_polarity'] = avg_polarity.tolist()
         outputs[i]['avg_irony'] = avg_irony.tolist()
         outputs[i]['avg_bias'] = avg_bias.tolist()
+
+    # graph pipeline
+    df = pd.DataFrame({'text':df_texts,'sentiment':df_sentiments})
+    df['id'] = df.index
+    tfidf = TfidfVectorizer(stop_words='english',norm='l2')
+    DxT = tfidf.fit_transform(df['text'])
+    DxD = np.dot(DxT,DxT.T)
+    G = nx.Graph()
+    for i in range(df.shape[0]):
+        idx = df.at[i,'id']
+        text = df.at[i,'text']
+        sentiment = df.at[i,'sentiment']
+        G.add_node(idx,text=text,sentiment=sentiment)
+    dense_DxD = DxD.toarray()
+    len_dense = len(dense_DxD)
+    cutoff=0
+    for i in range(len_dense):
+        for j in range(i+1,len_dense):
+            if dense_DxD[i,j]>=cutoff:
+                weight=dense_DxD[i,j]
+                G.add_edge(df.at[i,'id'],df.at[j,'id'],weight=weight)
+    for node,degree in list(dict(G.degree()).items()):
+        if degree == 0:
+            G.remove_node(node)
+    pos = nxlayout.fruchterman_reingold_layout(G,k=1.5/np.sqrt(len(G.nodes())))
+    edge_data = []
+    colors = {0:'1',1:'2'}
+    for u,v,w in G.edges(data=True):
+        x0,y0 = pos[u]
+        x1,y1 = pos[v]
+        w = w['weight']
+        edge_data.append(go.Scatter(x=[x0,x1,None],
+                                    y=[y0,y1,None],
+                                    line=go.Line(width=3.0*w,color='#888'),
+                                    hoverinfo='none',
+                                    mode='lines'))
+    node_data = go.Scatter(
+        x=[],
+        y=[],
+        text=[],
+        mode='markers',
+        hoverinfo='text',
+        marker=go.Marker(
+            showscale=True,
+            reversescale=True,
+            color=[],
+            size=5.0,
+            colorbar=dict(
+                thickness=15,
+                xanchor='left',
+                tickmode='array',
+                tickvals=[1,2],
+                ticktext=['negative','positive'],
+                ticks = 'outside'
+            ),
+            line=dict(width=0.5)))
+    for u,w in G.nodes(data=True):
+        x,y = pos[u]
+        color = colors[w['sentiment']]
+        text = w['text']
+        node_data['x'].append(x)
+        node_data['y'].append(y)
+        node_data['text'].append(text)
+        node_data['marker']['color'].append(color)
+    # end graph pipeline
+
     overall_unique, overall_count = np.unique(overall_local_entities_nouns, return_counts = True)
     overall_unique = overall_unique[np.argsort(overall_count)[::-1]][:200].tolist()
     overall_count = overall_count[np.argsort(overall_count)[::-1]][:200].tolist()
@@ -253,4 +327,5 @@ def filterP(links):
            'org': list(set(orgs)),
            'gpe': list(set(gpes)),
            'outputs': outputs,
-           'wordcloud':list(zip(overall_unique, overall_count))}
+           'wordcloud':list(zip(overall_unique, overall_count)),
+           'sentiment-network':edge_data+[node_data]}

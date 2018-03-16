@@ -72,7 +72,12 @@ function setgraph(outputs, keyword){
   $('#span-person').html(outputs['person'].join(', '));
   $('#span-org').html(outputs['org'].join(', '));
   $('#span-gpe').html(outputs['gpe'].join(', '));
-
+  Plotly.newPlot('div-network', outputs['sentiment-network'], {title:'Sentiment Network',
+  showlegend:false,
+  hovermode:'closest',
+  titlefont:{size:16},
+  xaxis:{showgrid:false, zeroline:false, showticklabels:false},
+  yaxis:{showgrid:false, zeroline:false, showticklabels:false}});
   var barChartData = {
     labels: outputs['tokens'],
     datasets: [{

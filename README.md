@@ -18,4 +18,5 @@ bash gunicorn.sh 1
 
 ![alt text](screenshot/screen1.png)
 ![alt text](screenshot/screen2.png)
+![alt text](screenshot/screen4.png)
 ![alt text](screenshot/screen3.png)
